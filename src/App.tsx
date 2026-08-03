@@ -93,12 +93,15 @@ export default function App() {
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
           const rawText = await res.text();
-          console.warn(`[Attempt ${attempt + 1}] Non-JSON Response on ${url}:`, rawText.slice(0, 150));
+          console.warn(`[Attempt ${attempt + 1}] Non-JSON Response (${res.status}) on ${url}:`, rawText.slice(0, 150));
           if (attempt < retries) {
             await new Promise((r) => setTimeout(r, 1500));
             continue;
           }
-          throw new Error(`Máy chủ đang khởi động lại hoặc không thể phản hồi đúng định dạng JSON. Vui lòng thử lại sau vài giây.`);
+          if (res.status === 500 || res.status === 502) {
+            throw new Error(`Máy chủ Vercel báo lỗi (${res.status}). Vui lòng kiểm tra Vercel Environment Variables (GEMINI_API_KEY) hoặc xem Vercel Deployment Logs.`);
+          }
+          throw new Error(`Máy chủ đang phản hồi không đúng định dạng JSON (${res.status}). Vui lòng thử lại sau vài giây.`);
         }
         const data = await res.json();
         if (!res.ok || (data && data.success === false)) {
@@ -106,7 +109,7 @@ export default function App() {
         }
         return data;
       } catch (err: any) {
-        if (attempt < retries && (err.message?.includes('khởi động') || err.message?.includes('fetch'))) {
+        if (attempt < retries && (err.message?.includes('định dạng JSON') || err.message?.includes('fetch'))) {
           await new Promise((r) => setTimeout(r, 1500));
           continue;
         }
