@@ -1,0 +1,6 @@
+{
+  "name": "EduAI Assistant - Tự Động Hóa Học Liệu & Trò Chơi Hóa Ôn Thi",
+  "description": "Hệ thống AI tự động chuyển đổi tài liệu bài giảng thành ngân hàng câu hỏi phân hóa chuẩn GD&ĐT, sơ đồ tư duy, flashcard Anki và các trò chơi học tập Wordwall.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
