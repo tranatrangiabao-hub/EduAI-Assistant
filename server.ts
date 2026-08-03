@@ -12,15 +12,18 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// Initialize Google GenAI Server-side
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "",
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
+// Initialize Google GenAI Server-side helper
+function getAiClient() {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
     },
-  },
-});
+  });
+}
 
 // Health check
 app.get("/api/health", (_req, res) => {
@@ -2173,13 +2176,14 @@ async function generateContentWithRetry(params: {
   config?: any;
   model?: string;
 }) {
-  const requestedModel = params.model || "gemini-3.6-flash";
+  const requestedModel = params.model || "gemini-2.5-flash";
 
   const modelsToTry = [
     requestedModel,
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-3.6-flash",
-    "gemini-flash-latest",
-    "gemini-3.1-flash-lite",
   ];
 
   const uniqueModels = Array.from(new Set(modelsToTry));
@@ -2201,7 +2205,7 @@ async function generateContentWithRetry(params: {
           setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 12 seconds")), timeoutMs)
         );
 
-        const callPromise = ai.models.generateContent({
+        const callPromise = getAiClient().models.generateContent({
           ...params,
           config: requestConfig,
           model: modelName,
@@ -2272,13 +2276,12 @@ async function generateContentWithRetry(params: {
  * Generates an automated GD&ĐT matrix aligned MCQ bank & summary points from input text
  */
 app.post("/api/generate-quiz", async (req, res) => {
-  const reqSubject = req.body?.subject || "Tin học";
-  const reqGrade = req.body?.grade || "Lớp 12";
-  const rawContent = req.body?.content || "";
-  const cleanedContent = cleanTextForAi(rawContent, 8000);
-  const targetQuestionCount = Math.max(1, Math.min(50, Number(req.body?.questionCount) || 10));
-
   try {
+    const reqSubject = req.body?.subject || "Tin học";
+    const reqGrade = req.body?.grade || "Lớp 12";
+    const rawContent = req.body?.content || "";
+    const cleanedContent = cleanTextForAi(rawContent, 8000);
+    const targetQuestionCount = Math.max(1, Math.min(50, Number(req.body?.questionCount) || 10));
     const {
       schoolLevel = "THPT", // "THCS" | "THPT"
       subject = reqSubject,
@@ -2429,7 +2432,7 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
 `;
 
     const response = await generateContentWithRetry({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         systemInstruction,
@@ -2584,12 +2587,17 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
       data: parsedData,
     });
   } catch (error: any) {
-    console.log("[QuizGen] Notice: AI generation limit or fallback needed, serving GD&ĐT curriculum fallback dataset.");
-    const fallbackData = buildSmartFallbackFromContent(cleanedContent, reqSubject, reqGrade, reqSubject, targetQuestionCount);
+    console.error("[QuizGen Error]", error);
+    const safeSubject = req.body?.subject || "Tin học";
+    const safeGrade = req.body?.grade || "Lớp 12";
+    const safeContent = cleanTextForAi(req.body?.content || "", 8000);
+    const safeCount = Math.max(1, Math.min(50, Number(req.body?.questionCount) || 10));
+
+    const fallbackData = buildSmartFallbackFromContent(safeContent, safeSubject, safeGrade, safeSubject, safeCount);
     return res.json({
       success: true,
       data: fallbackData,
-      warning: "Hệ thống AI đang tạm thời đạt giới hạn tần suất lượt gọi (Rate Limit 429). Đã kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT dự phòng để bạn tiếp tục bài học không bị gián đoạn."
+      warning: "Hệ thống AI đang khởi động hoặc đạt giới hạn tần suất. Đã kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT dự phòng để bạn sử dụng ngay."
     });
   }
 });
@@ -2614,7 +2622,7 @@ Hãy đóng vai trợ lý gia sư AI cá nhân hóa:
 `;
 
     const response = await generateContentWithRetry({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         maxOutputTokens: 4096,
@@ -2699,7 +2707,7 @@ Hãy giải thích chi tiết, dễ hiểu:
 `;
 
     const response = await generateContentWithRetry({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
     });
 
