@@ -15,7 +15,7 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Initialize Google GenAI Server-side
 const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "",
+  apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "",
   httpOptions: {
     headers: {
       "User-Agent": "aistudio-build",
@@ -2732,7 +2732,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   });
 });
 
-// Setup Vite Development Middleware or Production Static Serving
+// Setup Vite Development Middleware or Production Static Serving (Non-Vercel only)
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -2748,13 +2748,13 @@ async function startServer() {
     });
   }
 
-  if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`EduAI Applet server running on http://0.0.0.0:${PORT}`);
-    });
-  }
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`EduAI Applet server running on http://0.0.0.0:${PORT}`);
+  });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
 
 export default app;
