@@ -2170,7 +2170,7 @@ function sanitizeQuestionOptionsServer(q: any): any {
 // In-memory cache for fast repeat responses (< 50ms)
 const quizCache = new Map<string, { timestamp: number; data: any }>();
 
-// Helper function to call Gemini API with automatic exponential backoff retry and model fallback for 503 high demand spikes & 429 quota exhaustion
+// Helper function to call Gemini API with fast fallback for serverless
 async function generateContentWithRetry(params: {
   contents: any;
   config?: any;
@@ -2182,83 +2182,63 @@ async function generateContentWithRetry(params: {
     requestedModel,
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-3.6-flash",
   ];
 
   const uniqueModels = Array.from(new Set(modelsToTry));
   let lastError: any = null;
 
   for (const modelName of uniqueModels) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const requestConfig = params.config ? { ...params.config } : {};
+    try {
+      const requestConfig = params.config ? { ...params.config } : {};
 
-        // Only attach googleSearch tool if responseSchema is NOT used, as tools conflict with structured JSON mode
-        if (!requestConfig.tools && !requestConfig.responseSchema && requestConfig.responseMimeType !== "application/json") {
-          requestConfig.tools = [{ googleSearch: {} }];
-        }
+      // Only attach googleSearch tool if responseSchema is NOT used, as tools conflict with structured JSON mode
+      if (!requestConfig.tools && !requestConfig.responseSchema && requestConfig.responseMimeType !== "application/json") {
+        requestConfig.tools = [{ googleSearch: {} }];
+      }
 
-        // 12-second max timeout per AI call for instant fallback
-        const timeoutMs = 12000;
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 12 seconds")), timeoutMs)
-        );
+      // 6-second max timeout per AI call so Vercel Serverless (10s limit) never times out with 504
+      const timeoutMs = 6000;
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 6 seconds")), timeoutMs)
+      );
 
-        const callPromise = getAiClient().models.generateContent({
-          ...params,
-          config: requestConfig,
-          model: modelName,
-        });
+      const callPromise = getAiClient().models.generateContent({
+        ...params,
+        config: requestConfig,
+        model: modelName,
+      });
 
-        const res: any = await Promise.race([callPromise, timeoutPromise]);
-        return res;
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = String(err?.message || err);
+      const res: any = await Promise.race([callPromise, timeoutPromise]);
+      return res;
+    } catch (err: any) {
+      lastError = err;
+      const errMsg = String(err?.message || err);
 
-        const isNotFound =
-          errMsg.includes("404") ||
-          errMsg.includes("NOT_FOUND") ||
-          errMsg.includes("no longer available") ||
-          errMsg.includes("is not found");
+      const isNotFound =
+        errMsg.includes("404") ||
+        errMsg.includes("NOT_FOUND") ||
+        errMsg.includes("no longer available") ||
+        errMsg.includes("is not found");
 
-        if (isNotFound) {
-          break;
-        }
+      if (isNotFound) {
+        continue;
+      }
 
-        const isQuotaExhausted =
-          errMsg.includes("429") ||
-          errMsg.includes("RESOURCE_EXHAUSTED") ||
-          errMsg.includes("Quota exceeded") ||
-          errMsg.includes("Rate Limit");
+      const isQuotaExhausted =
+        errMsg.includes("429") ||
+        errMsg.includes("RESOURCE_EXHAUSTED") ||
+        errMsg.includes("Quota exceeded") ||
+        errMsg.includes("Rate Limit");
 
-        if (isQuotaExhausted) {
-          console.log(`Model ${modelName} rate limited (429). Switching to fallback model...`);
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          break;
-        }
+      if (isQuotaExhausted) {
+        console.log(`Model ${modelName} rate limited (429). Trying next fallback...`);
+        continue;
+      }
 
-        const isTimeout = errMsg.includes("AI_TIMEOUT");
-        if (isTimeout) {
-          console.log(`[AI Timeout] Model ${modelName} timed out after 15s. Trying next fallback model...`);
-          break;
-        }
-
-        const isTransient =
-          errMsg.includes("503") ||
-          errMsg.includes("UNAVAILABLE") ||
-          errMsg.includes("high demand") ||
-          errMsg.includes("500") ||
-          errMsg.includes("FETCH_ERROR") ||
-          errMsg.includes("overloaded");
-
-        if (isTransient && attempt === 1) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          continue;
-        } else {
-          break;
-        }
+      const isTimeout = errMsg.includes("AI_TIMEOUT");
+      if (isTimeout) {
+        console.log(`[AI Timeout] Model ${modelName} reached 6s limit. Activating fast fallback...`);
+        break; // break early to return smart curriculum fallback immediately
       }
     }
   }
@@ -2268,7 +2248,7 @@ async function generateContentWithRetry(params: {
     throw new Error("Hệ thống Gemini AI đang tạm thời đạt giới hạn tần suất gửi câu hỏi (429 Rate Limit). Vui lòng đợi 30-45 giây rồi thử lại.");
   }
 
-  throw lastError || new Error("Không thể kết nối tới dịch vụ AI do hệ thống đang bận. Vui lòng thử lại sau giây lát.");
+  throw lastError || new Error("Không thể kết nối đến máy chủ AI sau các lần thử.");
 }
 
 /**
