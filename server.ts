@@ -2189,17 +2189,24 @@ async function generateContentWithRetry(params: {
 
   for (const modelName of uniqueModels) {
     try {
-      const requestConfig = params.config ? { ...params.config } : {};
+      const requestConfig: any = params.config ? { ...params.config } : {};
+
+      // Disable thinking tokens for ultra-fast generation (~1.5s - 2.5s)
+      if (!requestConfig.thinkingConfig) {
+        requestConfig.thinkingConfig = {
+          thinkingBudget: 0,
+        };
+      }
 
       // Only attach googleSearch tool if responseSchema is NOT used, as tools conflict with structured JSON mode
       if (!requestConfig.tools && !requestConfig.responseSchema && requestConfig.responseMimeType !== "application/json") {
         requestConfig.tools = [{ googleSearch: {} }];
       }
 
-      // 6-second max timeout per AI call so Vercel Serverless (10s limit) never times out with 504
-      const timeoutMs = 6000;
+      // 7.5-second max timeout per AI call so Vercel Serverless (10s limit) never times out with 504
+      const timeoutMs = 7500;
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 6 seconds")), timeoutMs)
+        setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 7.5 seconds")), timeoutMs)
       );
 
       const callPromise = getAiClient().models.generateContent({
@@ -2237,7 +2244,7 @@ async function generateContentWithRetry(params: {
 
       const isTimeout = errMsg.includes("AI_TIMEOUT");
       if (isTimeout) {
-        console.log(`[AI Timeout] Model ${modelName} reached 6s limit. Activating fast fallback...`);
+        console.log(`[AI Timeout] Model ${modelName} reached limit. Activating fast fallback...`);
         break; // break early to return smart curriculum fallback immediately
       }
     }
@@ -2418,7 +2425,7 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
         systemInstruction,
         temperature: 0.1, // Minimal temperature for fastest deterministic token generation
         topP: 0.8,
-        maxOutputTokens: 8192,
+        maxOutputTokens: Math.min(8192, Math.max(2048, targetQuestionCount * 450)),
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
