@@ -9,24 +9,31 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Support both standalone Node.js and Vercel Serverless environment where req.body is already pre-parsed
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    return next();
+  }
+  express.json({ limit: "50mb" })(req, res, next);
+});
+
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    return next();
+  }
+  express.urlencoded({ limit: "50mb", extended: true })(req, res, next);
+});
 
 // Initialize Google GenAI Server-side helper
 function getAiClient() {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
   return new GoogleGenAI({
     apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
   });
 }
 
 // Health check
-app.get("/api/health", (_req, res) => {
+app.get(["/api/health", "/health"], (_req, res) => {
   res.json({ status: "ok", version: "1.0.0" });
 });
 
@@ -84,7 +91,7 @@ function pruneUnusedContent(rawText: string): string {
  * POST /api/prune-text
  * Standalone API endpoint to prune boilerplate text from client
  */
-app.post("/api/prune-text", (req, res) => {
+app.post(["/api/prune-text", "/prune-text"], (req, res) => {
   try {
     const { text } = req.body;
     if (!text || typeof text !== "string") {
@@ -2262,7 +2269,7 @@ async function generateContentWithRetry(params: {
  * POST /api/generate-quiz
  * Generates an automated GD&ĐT matrix aligned MCQ bank & summary points from input text
  */
-app.post("/api/generate-quiz", async (req, res) => {
+app.post(["/api/generate-quiz", "/generate-quiz"], async (req, res) => {
   try {
     const reqSubject = req.body?.subject || "Tin học";
     const reqGrade = req.body?.grade || "Lớp 12";
@@ -2593,7 +2600,7 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
  * POST /api/adaptive-relevel
  * Generates personalized reinforcement questions or higher-tier questions for specific student needs
  */
-app.post("/api/adaptive-relevel", async (req, res) => {
+app.post(["/api/adaptive-relevel", "/adaptive-relevel"], async (req, res) => {
   try {
     const { topic, currentLevel, studentScore, weakTopics = [] } = req.body;
 
@@ -2671,7 +2678,7 @@ Hãy đóng vai trợ lý gia sư AI cá nhân hóa:
  * POST /api/explain-question
  * Detailed step-by-step AI explanation when student asks for help on a specific question
  */
-app.post("/api/explain-question", async (req, res) => {
+app.post(["/api/explain-question", "/explain-question"], async (req, res) => {
   try {
     const { question, options, selectedOption, correctOption, concept } = req.body;
 

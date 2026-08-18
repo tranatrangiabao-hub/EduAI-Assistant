@@ -222,9 +222,17 @@ export default function App() {
       setCurrentLesson(fallbackLesson);
       saveToHistory(fallbackLesson, schoolLevel);
       setActiveTab('question_bank');
-      setErrorMessage(
-        'Máy chủ Vercel phản hồi chậm (504). Hệ thống đã tự động kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT theo môn học để bạn ôn tập ngay không bị gián đoạn.'
-      );
+      
+      const errMsg = err?.message || '';
+      let userFriendlyNotice = '';
+      if (errMsg.includes('504') || errMsg.includes('thời gian')) {
+        userFriendlyNotice = 'Máy chủ phản hồi quá thời gian (504). Hệ thống đã tự động kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT theo môn học để bạn làm bài ngay.';
+      } else if (errMsg.includes('GEMINI_API_KEY') || errMsg.includes('500') || errMsg.includes('502')) {
+        userFriendlyNotice = 'Máy chủ Vercel đang thiếu hoặc lỗi GEMINI_API_KEY trong Vercel Environment Variables. Hệ thống đã nạp bộ câu hỏi môn học chuẩn.';
+      } else {
+        userFriendlyNotice = `Thông báo: ${errMsg || 'Hệ thống đã tự động kích hoạt ngân hàng câu hỏi chuẩn môn học.'}`;
+      }
+      setErrorMessage(userFriendlyNotice);
     } finally {
       setIsLoading(false);
     }
