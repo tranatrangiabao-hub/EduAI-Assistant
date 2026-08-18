@@ -2266,40 +2266,35 @@ async function generateContentWithRetry(params: {
 }
 
 /**
- * POST /api/generate-quiz
- * Generates an automated GD&ĐT matrix aligned MCQ bank & summary points from input text
+ * Core business logic for Quiz Generation (callable by Express and Vercel Serverless)
  */
-app.post(["/api/generate-quiz", "/generate-quiz"], async (req, res) => {
-  try {
-    const reqSubject = req.body?.subject || "Tin học";
-    const reqGrade = req.body?.grade || "Lớp 12";
-    const rawContent = req.body?.content || "";
-    const cleanedContent = cleanTextForAi(rawContent, 8000);
-    const targetQuestionCount = Math.max(1, Math.min(50, Number(req.body?.questionCount) || 10));
-    const {
-      schoolLevel = "THPT", // "THCS" | "THPT"
-      subject = reqSubject,
-      grade = reqGrade,
-      matrix = { nhanBiet: 40, thongHieu: 30, vanDung: 20, vanDungCao: 10 },
-      targetLevel = "Tất cả năng lực", // "Học sinh Cần Bổ Trợ", "Học sinh Khá", "Học sinh Giỏi", "Tất cả năng lực"
-      customInstructions = "",
-      selectedQuestionTypes = ["multiple_choice", "true_false", "short_answer"],
-      examModeConfig = null,
-    } = req.body;
+export async function handleGenerateQuiz(body: any) {
+  const reqSubject = body?.subject || "Tin học";
+  const reqGrade = body?.grade || "Lớp 12";
+  const rawContent = body?.content || "";
+  const cleanedContent = cleanTextForAi(rawContent, 8000);
+  const targetQuestionCount = Math.max(1, Math.min(50, Number(body?.questionCount) || 10));
+  const {
+    schoolLevel = "THPT", // "THCS" | "THPT"
+    subject = reqSubject,
+    grade = reqGrade,
+    matrix = { nhanBiet: 40, thongHieu: 30, vanDung: 20, vanDungCao: 10 },
+    targetLevel = "Tất cả năng lực", // "Học sinh Cần Bổ Trợ", "Học sinh Khá", "Học sinh Giỏi", "Tất cả năng lực"
+    customInstructions = "",
+    selectedQuestionTypes = ["multiple_choice", "true_false", "short_answer"],
+    examModeConfig = null,
+  } = body || {};
 
-    if (!rawContent || typeof rawContent !== "string" || rawContent.trim().length === 0) {
-      return res.status(400).json({ error: "Nội dung bài giảng/tài liệu không được để trống." });
-    }
+  if (!rawContent || typeof rawContent !== "string" || rawContent.trim().length === 0) {
+    throw new Error("Nội dung bài giảng/tài liệu không được để trống.");
+  }
 
-    const cacheKey = `${subject}_${grade}_${targetQuestionCount}_${cleanedContent.slice(0, 300)}_${JSON.stringify(matrix)}_${selectedQuestionTypes.join(",")}`;
-    const cachedEntry = quizCache.get(cacheKey);
-    if (cachedEntry && Date.now() - cachedEntry.timestamp < 1000 * 60 * 30) {
-      console.log(`[QuizGen Cache Hit] Returning cached quiz data in <10ms for key: ${cacheKey.slice(0, 40)}...`);
-      return res.json({
-        success: true,
-        data: cachedEntry.data,
-      });
-    }
+  const cacheKey = `${subject}_${grade}_${targetQuestionCount}_${cleanedContent.slice(0, 300)}_${JSON.stringify(matrix)}_${selectedQuestionTypes.join(",")}`;
+  const cachedEntry = quizCache.get(cacheKey);
+  if (cachedEntry && Date.now() - cachedEntry.timestamp < 1000 * 60 * 30) {
+    console.log(`[QuizGen Cache Hit] Returning cached quiz data in <10ms for key: ${cacheKey.slice(0, 40)}...`);
+    return cachedEntry.data;
+  }
 
     const levelTitle = schoolLevel === "THCS" ? "CẤP TRUNG HỌC CƠ SỞ (THCS - LỚP 6 ĐẾN 9)" : "CẤP TRUNG HỌC PHỔ THÔNG (THPT - LỚP 10 ĐẾN 12)";
     const levelPedagogy = schoolLevel === "THCS" 
@@ -2573,12 +2568,22 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
       parsedData.questions = parsedData.questions.slice(0, targetQuestionCount);
     }
 
-    // Save to in-memory cache for ultra-fast response on repeat requests
-    quizCache.set(cacheKey, { timestamp: Date.now(), data: parsedData });
+  // Save to in-memory cache for ultra-fast response on repeat requests
+  quizCache.set(cacheKey, { timestamp: Date.now(), data: parsedData });
 
+  return parsedData;
+}
+
+/**
+ * POST /api/generate-quiz
+ * Generates an automated GD&ĐT matrix aligned MCQ bank & summary points from input text
+ */
+app.post(["/api/generate-quiz", "/generate-quiz"], async (req, res) => {
+  try {
+    const data = await handleGenerateQuiz(req.body);
     return res.json({
       success: true,
-      data: parsedData,
+      data,
     });
   } catch (error: any) {
     console.error("[QuizGen Error]", error);
@@ -2597,14 +2602,12 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
 });
 
 /**
- * POST /api/adaptive-relevel
- * Generates personalized reinforcement questions or higher-tier questions for specific student needs
+ * Core business logic for Adaptive Re-level
  */
-app.post(["/api/adaptive-relevel", "/adaptive-relevel"], async (req, res) => {
-  try {
-    const { topic, currentLevel, studentScore, weakTopics = [] } = req.body;
+export async function handleAdaptiveRelevel(body: any) {
+  const { topic = "Chủ đề học tập", currentLevel = "Tự động phân hóa", studentScore = 70, weakTopics = [] } = body || {};
 
-    const prompt = `
+  const prompt = `
 Học sinh vừa hoàn thành bài luyện tập chủ đề: "${topic}".
 Kết quả đạt: ${studentScore}%.
 Cấp độ hiện tại: ${currentLevel}.
@@ -2615,46 +2618,55 @@ Hãy đóng vai trợ lý gia sư AI cá nhân hóa:
 2. Tạo 3 câu hỏi trắc nghiệm mới phù hợp chính xác với lỗ hổng kiến thức này để giúp học sinh lấp khoảng trống năng lực.
 `;
 
-    const response = await generateContentWithRetry({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        maxOutputTokens: 4096,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            feedback: { type: Type.STRING, description: "Lời khuyên sư phạm cá nhân hóa" },
-            recommendedAction: { type: Type.STRING, description: "Hành động gợi ý cho học sinh" },
-            remedialQuestions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  question: { type: Type.STRING },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correctOption: { type: Type.INTEGER },
-                  explanation: { type: Type.STRING },
-                  taxonomyLevel: { type: Type.STRING },
-                  difficulty: { type: Type.STRING },
-                  topic: { type: Type.STRING },
-                },
+  const response = await generateContentWithRetry({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      maxOutputTokens: 4096,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          feedback: { type: Type.STRING, description: "Lời khuyên sư phạm cá nhân hóa" },
+          recommendedAction: { type: Type.STRING, description: "Hành động gợi ý cho học sinh" },
+          remedialQuestions: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                question: { type: Type.STRING },
+                options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                correctOption: { type: Type.INTEGER },
+                explanation: { type: Type.STRING },
+                taxonomyLevel: { type: Type.STRING },
+                difficulty: { type: Type.STRING },
+                topic: { type: Type.STRING },
               },
             },
           },
-          required: ["feedback", "recommendedAction", "remedialQuestions"],
         },
+        required: ["feedback", "recommendedAction", "remedialQuestions"],
       },
-    });
+    },
+  });
 
-    const parsedRes = safeParseJSON(response.text || "{}");
-    if (parsedRes && Array.isArray(parsedRes.remedialQuestions)) {
-      parsedRes.remedialQuestions = deduplicateAndDistributeQuestions(parsedRes.remedialQuestions, 3);
-    }
+  const parsedRes = safeParseJSON(response.text || "{}");
+  if (parsedRes && Array.isArray(parsedRes.remedialQuestions)) {
+    parsedRes.remedialQuestions = deduplicateAndDistributeQuestions(parsedRes.remedialQuestions, 3);
+  }
 
+  return parsedRes;
+}
+
+/**
+ * POST /api/adaptive-relevel
+ */
+app.post(["/api/adaptive-relevel", "/adaptive-relevel"], async (req, res) => {
+  try {
+    const data = await handleAdaptiveRelevel(req.body);
     return res.json({
       success: true,
-      data: parsedRes,
+      data,
     });
   } catch (error: any) {
     console.log("[AdaptiveRelevel] AI prompt handled:", error?.message || error);
@@ -2675,21 +2687,19 @@ Hãy đóng vai trợ lý gia sư AI cá nhân hóa:
 });
 
 /**
- * POST /api/explain-question
- * Detailed step-by-step AI explanation when student asks for help on a specific question
+ * Core business logic for Question Explanation
  */
-app.post(["/api/explain-question", "/explain-question"], async (req, res) => {
-  try {
-    const { question, options, selectedOption, correctOption, concept } = req.body;
+export async function handleExplainQuestion(body: any) {
+  const { question, options = [], selectedOption = 0, correctOption = 0 } = body || {};
 
-    const prompt = `
+  const prompt = `
 Học sinh đang thắc mắc về câu hỏi sau:
 Câu hỏi: "${question}"
 Các lựa chọn:
-A. ${options[0]}
-B. ${options[1]}
-C. ${options[2]}
-D. ${options[3]}
+A. ${options[0] || ""}
+B. ${options[1] || ""}
+C. ${options[2] || ""}
+D. ${options[3] || ""}
 
 Học sinh đã chọn: ${options[selectedOption]} (Lựa chọn ${String.fromCharCode(65 + selectedOption)})
 Đáp án đúng là: ${options[correctOption]} (Lựa chọn ${String.fromCharCode(65 + correctOption)})
@@ -2700,14 +2710,23 @@ Hãy giải thích chi tiết, dễ hiểu:
 3. Mẹo nhớ nhanh hoặc từ khóa cốt lõi để không lặp lại sai lầm trong kỳ thi Tốt nghiệp THPT.
 `;
 
-    const response = await generateContentWithRetry({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
+  const response = await generateContentWithRetry({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+  });
 
+  return response.text;
+}
+
+/**
+ * POST /api/explain-question
+ */
+app.post(["/api/explain-question", "/explain-question"], async (req, res) => {
+  try {
+    const text = await handleExplainQuestion(req.body);
     return res.json({
       success: true,
-      explanation: response.text,
+      explanation: text,
     });
   } catch (error: any) {
     console.log("[ExplainQuestion] AI prompt handled:", error?.message || error);
@@ -2722,6 +2741,8 @@ Hãy giải thích chi tiết, dễ hiểu:
     });
   }
 });
+
+export { buildSmartFallbackFromContent, pruneUnusedContent };
 
 // Express global JSON error handler middleware
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
