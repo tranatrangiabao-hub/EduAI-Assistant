@@ -31,17 +31,18 @@ export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-gemini-api-key, Authorization"
   );
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
   const url = req.url || "";
   const body = req.method === "POST" ? await parseRequestBody(req) : {};
+  const customApiKey = (req.headers["x-gemini-api-key"] as string) || (req.headers["authorization"]?.replace("Bearer ", "") as string) || body?.apiKey;
 
   if (url.includes("generate-quiz")) {
     try {
-      const data = await handleGenerateQuiz(body);
+      const data = await handleGenerateQuiz(body, customApiKey);
       return res.status(200).json({ success: true, data });
     } catch (error: any) {
       console.error("[Vercel /api/index generate-quiz Error]", error);
@@ -61,7 +62,7 @@ export default async function handler(req: any, res: any) {
 
   if (url.includes("adaptive-relevel")) {
     try {
-      const data = await handleAdaptiveRelevel(body);
+      const data = await handleAdaptiveRelevel(body, customApiKey);
       return res.status(200).json({ success: true, data });
     } catch (error: any) {
       return res.status(200).json({
@@ -78,7 +79,7 @@ export default async function handler(req: any, res: any) {
 
   if (url.includes("explain-question")) {
     try {
-      const text = await handleExplainQuestion(body);
+      const text = await handleExplainQuestion(body, customApiKey);
       return res.status(200).json({ success: true, explanation: text });
     } catch (error: any) {
       return res.status(200).json({

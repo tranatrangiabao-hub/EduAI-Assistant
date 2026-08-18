@@ -25,8 +25,8 @@ app.use((req, res, next) => {
 });
 
 // Initialize Google GenAI Server-side helper
-function getAiClient() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
+function getAiClient(customApiKey?: string) {
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY || process.env.API_KEY || "";
   return new GoogleGenAI({
     apiKey,
   });
@@ -2182,7 +2182,7 @@ async function generateContentWithRetry(params: {
   contents: any;
   config?: any;
   model?: string;
-}) {
+}, customApiKey?: string) {
   const requestedModel = params.model || "gemini-2.5-flash";
 
   const modelsToTry = [
@@ -2216,7 +2216,7 @@ async function generateContentWithRetry(params: {
         setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 7.5 seconds")), timeoutMs)
       );
 
-      const callPromise = getAiClient().models.generateContent({
+      const callPromise = getAiClient(customApiKey).models.generateContent({
         ...params,
         config: requestConfig,
         model: modelName,
@@ -2268,12 +2268,13 @@ async function generateContentWithRetry(params: {
 /**
  * Core business logic for Quiz Generation (callable by Express and Vercel Serverless)
  */
-export async function handleGenerateQuiz(body: any) {
+export async function handleGenerateQuiz(body: any, customApiKey?: string) {
   const reqSubject = body?.subject || "Tin học";
   const reqGrade = body?.grade || "Lớp 12";
   const rawContent = body?.content || "";
   const cleanedContent = cleanTextForAi(rawContent, 8000);
   const targetQuestionCount = Math.max(1, Math.min(50, Number(body?.questionCount) || 10));
+  const effectiveApiKey = body?.apiKey || customApiKey;
   const {
     schoolLevel = "THPT", // "THCS" | "THPT"
     subject = reqSubject,
@@ -2519,7 +2520,7 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
           required: ["title", "summaryPoints", "questions"],
         },
       },
-    });
+    }, effectiveApiKey);
 
     const jsonText = response.text || "{}";
     const parsedData = safeParseJSON(jsonText, { subject: reqSubject, grade: reqGrade, title: reqSubject, content: cleanedContent });
@@ -2604,8 +2605,9 @@ app.post(["/api/generate-quiz", "/generate-quiz"], async (req, res) => {
 /**
  * Core business logic for Adaptive Re-level
  */
-export async function handleAdaptiveRelevel(body: any) {
+export async function handleAdaptiveRelevel(body: any, customApiKey?: string) {
   const { topic = "Chủ đề học tập", currentLevel = "Tự động phân hóa", studentScore = 70, weakTopics = [] } = body || {};
+  const effectiveApiKey = body?.apiKey || customApiKey;
 
   const prompt = `
 Học sinh vừa hoàn thành bài luyện tập chủ đề: "${topic}".
@@ -2648,7 +2650,7 @@ Hãy đóng vai trợ lý gia sư AI cá nhân hóa:
         required: ["feedback", "recommendedAction", "remedialQuestions"],
       },
     },
-  });
+  }, effectiveApiKey);
 
   const parsedRes = safeParseJSON(response.text || "{}");
   if (parsedRes && Array.isArray(parsedRes.remedialQuestions)) {
@@ -2663,7 +2665,8 @@ Hãy đóng vai trợ lý gia sư AI cá nhân hóa:
  */
 app.post(["/api/adaptive-relevel", "/adaptive-relevel"], async (req, res) => {
   try {
-    const data = await handleAdaptiveRelevel(req.body);
+    const customApiKey = (req.headers["x-gemini-api-key"] as string) || req.body?.apiKey;
+    const data = await handleAdaptiveRelevel(req.body, customApiKey);
     return res.json({
       success: true,
       data,
@@ -2689,8 +2692,9 @@ app.post(["/api/adaptive-relevel", "/adaptive-relevel"], async (req, res) => {
 /**
  * Core business logic for Question Explanation
  */
-export async function handleExplainQuestion(body: any) {
+export async function handleExplainQuestion(body: any, customApiKey?: string) {
   const { question, options = [], selectedOption = 0, correctOption = 0 } = body || {};
+  const effectiveApiKey = body?.apiKey || customApiKey;
 
   const prompt = `
 Học sinh đang thắc mắc về câu hỏi sau:
@@ -2713,7 +2717,7 @@ Hãy giải thích chi tiết, dễ hiểu:
   const response = await generateContentWithRetry({
     model: "gemini-2.5-flash",
     contents: prompt,
-  });
+  }, effectiveApiKey);
 
   return response.text;
 }
@@ -2723,7 +2727,8 @@ Hãy giải thích chi tiết, dễ hiểu:
  */
 app.post(["/api/explain-question", "/explain-question"], async (req, res) => {
   try {
-    const text = await handleExplainQuestion(req.body);
+    const customApiKey = (req.headers["x-gemini-api-key"] as string) || req.body?.apiKey;
+    const text = await handleExplainQuestion(req.body, customApiKey);
     return res.json({
       success: true,
       explanation: text,

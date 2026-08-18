@@ -87,9 +87,19 @@ export default function App() {
 
   // Helper for safe API fetching with auto-retry and clear error messaging
   const safeFetchJson = async (url: string, options?: RequestInit, retries = 2): Promise<any> => {
+    const customApiKey = localStorage.getItem('eduai_custom_api_key') || '';
+    const mergedHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(customApiKey ? { 'x-gemini-api-key': customApiKey } : {}),
+      ...((options?.headers as Record<string, string>) || {}),
+    };
+
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const res = await fetch(url, options);
+        const res = await fetch(url, {
+          ...options,
+          headers: mergedHeaders,
+        });
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
           const rawText = await res.text();
@@ -102,7 +112,7 @@ export default function App() {
             throw new Error(`Máy chủ Vercel vượt quá thời gian xử lý (504 Gateway Timeout).`);
           }
           if (res.status === 500 || res.status === 502) {
-            throw new Error(`Máy chủ Vercel báo lỗi (${res.status}). Vui lòng kiểm tra Vercel Environment Variables (GEMINI_API_KEY).`);
+            throw new Error(`Máy chủ Vercel báo lỗi (${res.status}). Vui lòng kiểm tra Vercel Environment Variables (GEMINI_API_KEY) hoặc nhập Key trong Cài Đặt.`);
           }
           throw new Error(`Máy chủ đang phản hồi không đúng định dạng (${res.status}).`);
         }
@@ -121,23 +131,87 @@ export default function App() {
     }
   };
 
-  // Helper to construct fallback lesson on frontend
+  // Helper to construct high-quality, exact-count fallback lesson on frontend
   const buildClientFallbackLesson = (
     content: string,
     subject: string,
     grade: string,
     schoolLevel: SchoolLevel,
     matrix: QuizMatrix,
+    questionCount: number = 10,
+    selectedQuestionTypes: QuestionType[] = ['multiple_choice'],
     examModeConfig?: ExamModeConfig
   ): LessonUnit => {
-    // Check if we have a matching sample lesson
-    const matchedSample = SAMPLE_LESSONS.find(
+    // Gather all questions from matching subject sample lessons
+    const matchedSamples = SAMPLE_LESSONS.filter(
       (s) => s.subject.toLowerCase() === subject.toLowerCase() || s.grade.toLowerCase() === grade.toLowerCase()
-    ) || SAMPLE_LESSONS[0];
+    );
+    const pool = matchedSamples.length > 0 ? matchedSamples : SAMPLE_LESSONS;
 
-    const title = content.trim().length > 3 && content.trim().length < 50
+    const baseSample = pool[0];
+    const candidateQuestions: Question[] = [];
+    for (const sample of pool) {
+      for (const q of sample.questions) {
+        candidateQuestions.push(q);
+      }
+    }
+
+    // Extract sentences & key ideas from user's provided content
+    const sentences = content
+      .split(/[.\n;]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 15 && !s.startsWith('Bài') && !s.startsWith('Chương'));
+
+    const finalQuestions: Question[] = [];
+    const targetCount = Math.max(1, questionCount);
+
+    // If user provided substantive text, generate questions from their sentences
+    if (sentences.length > 0) {
+      sentences.forEach((sent, idx) => {
+        if (finalQuestions.length >= targetCount) return;
+
+        const words = sent.split(/\s+/);
+        const keyTerm = words.slice(0, Math.min(4, words.length)).join(' ');
+
+        finalQuestions.push({
+          id: `q_user_gen_${Date.now()}_${idx + 1}`,
+          questionType: selectedQuestionTypes.includes('multiple_choice') ? 'multiple_choice' : selectedQuestionTypes[0] || 'multiple_choice',
+          question: `Theo kiến thức bài học môn ${subject} (${grade}), nội dung nào sau đây diễn tả chính xác nhất?`,
+          options: [
+            sent,
+            `Nội dung trái ngược với: "${keyTerm}" không phản ánh đúng quy luật môn học.`,
+            `Khái niệm chưa đầy đủ về mặt bản chất khoa học của ${subject}.`,
+            `Hiện tượng không xảy ra trong điều kiện tiêu chuẩn của ${grade}.`,
+          ],
+          correctOption: 0,
+          correctOptionText: sent,
+          explanation: `Đáp án đúng là A. "${sent}". Nội dung được trích xuất trực tiếp và chuẩn xác từ tài liệu bài học.`,
+          taxonomyLevel: idx % 4 === 0 ? 'Nhận biết' : idx % 4 === 1 ? 'Thông hiểu' : idx % 4 === 2 ? 'Vận dụng' : 'Vận dụng cao',
+          difficulty: idx % 4 === 0 ? 'Dễ' : idx % 4 === 1 ? 'Trung bình' : 'Khó',
+          topic: keyTerm || `${subject} ${grade}`,
+        });
+      });
+    }
+
+    // Complement with pool questions if still below targetCount
+    let poolIdx = 0;
+    while (finalQuestions.length < targetCount) {
+      const qTemplate = candidateQuestions[poolIdx % candidateQuestions.length] || candidateQuestions[0];
+      finalQuestions.push({
+        ...qTemplate,
+        id: `q_fb_${Date.now()}_${finalQuestions.length + 1}`,
+        question: finalQuestions.length >= candidateQuestions.length 
+          ? `[Câu ${finalQuestions.length + 1} - ${subject} ${grade}] ${qTemplate.question}`
+          : qTemplate.question,
+      });
+      poolIdx++;
+    }
+
+    const title = examModeConfig?.enabled
+      ? `${examModeConfig.examTitle || 'ĐỀ KIỂM TRA ĐỊNH KỲ'} - MÔN ${subject.toUpperCase()} ${grade.toUpperCase()}`
+      : content.trim().length > 3 && content.trim().length < 50
       ? `${subject} ${grade} - ${content.trim()}`
-      : `${subject} ${grade} - Ngân hàng câu hỏi chuẩn GD&ĐT 2018`;
+      : `${subject} ${grade} - Ngân hàng câu hỏi phân hóa GD&ĐT 2018`;
 
     return {
       id: `lesson_${Date.now()}`,
@@ -145,17 +219,18 @@ export default function App() {
       subject,
       grade,
       schoolLevel,
-      rawText: content || matchedSample.rawText,
-      summaryPoints: matchedSample.summaryPoints.length > 0 ? matchedSample.summaryPoints : [
-        `Nội dung trọng tâm môn ${subject} ${grade} theo khung chuẩn GD&ĐT 2018.`,
-        `Ghi nhớ các khái niệm cốt lõi và định lý/quy tắc căn bản.`,
-        `Rèn luyện kỹ năng giải quyết tình huống vận dụng thực tiễn.`
-      ],
-      mindmapMermaid: matchedSample.mindmapMermaid || `mindmap\n  root((${subject} ${grade}))\n    Lý thuyết trọng tâm\n    Dạng bài cơ bản\n    Vận dụng nâng cao`,
-      questions: matchedSample.questions.map((q, idx) => sanitizeQuestionOptions({
-        ...q,
-        id: `q_fallback_${Date.now()}_${idx + 1}`
-      })),
+      rawText: content || baseSample.rawText,
+      summaryPoints: sentences.length >= 3 
+        ? sentences.slice(0, 5) 
+        : baseSample.summaryPoints.length > 0 
+        ? baseSample.summaryPoints 
+        : [
+            `Nội dung trọng tâm môn ${subject} ${grade} theo khung chuẩn GD&ĐT 2018.`,
+            `Ghi nhớ các khái niệm cốt lõi và định lý/quy tắc căn bản.`,
+            `Rèn luyện kỹ năng giải quyết tình huống vận dụng thực tiễn.`
+          ],
+      mindmapMermaid: baseSample.mindmapMermaid || `mindmap\n  root((${subject} ${grade}))\n    Lý thuyết trọng tâm\n    Dạng bài cơ bản\n    Vận dụng nâng cao`,
+      questions: finalQuestions.slice(0, targetCount).map((q) => sanitizeQuestionOptions(q)),
       matrix,
       examModeConfig,
       createdAt: new Date().toISOString(),
@@ -178,6 +253,8 @@ export default function App() {
     setIsLoading(true);
     setErrorMessage(null);
 
+    const customApiKey = localStorage.getItem('eduai_custom_api_key') || '';
+
     try {
       const data = await safeFetchJson('/api/generate-quiz', {
         method: 'POST',
@@ -193,6 +270,7 @@ export default function App() {
           selectedQuestionTypes,
           schoolLevel,
           examModeConfig,
+          apiKey: customApiKey,
         }),
       });
 
@@ -216,9 +294,22 @@ export default function App() {
       setCurrentLesson(newLesson);
       saveToHistory(newLesson, schoolLevel);
       setActiveTab('question_bank');
+
+      if (data.warning) {
+        setErrorMessage(data.warning);
+      }
     } catch (err: any) {
       console.warn('Generation via API timed out or failed, activating smart curriculum dataset:', err);
-      const fallbackLesson = buildClientFallbackLesson(content, subject, grade, schoolLevel, matrix, examModeConfig);
+      const fallbackLesson = buildClientFallbackLesson(
+        content,
+        subject,
+        grade,
+        schoolLevel,
+        matrix,
+        questionCount,
+        selectedQuestionTypes,
+        examModeConfig
+      );
       setCurrentLesson(fallbackLesson);
       saveToHistory(fallbackLesson, schoolLevel);
       setActiveTab('question_bank');
@@ -228,7 +319,7 @@ export default function App() {
       if (errMsg.includes('504') || errMsg.includes('thời gian')) {
         userFriendlyNotice = 'Máy chủ phản hồi quá thời gian (504). Hệ thống đã tự động kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT theo môn học để bạn làm bài ngay.';
       } else if (errMsg.includes('GEMINI_API_KEY') || errMsg.includes('500') || errMsg.includes('502')) {
-        userFriendlyNotice = 'Máy chủ Vercel đang thiếu hoặc lỗi GEMINI_API_KEY trong Vercel Environment Variables. Hệ thống đã nạp bộ câu hỏi môn học chuẩn.';
+        userFriendlyNotice = 'Máy chủ Vercel đang thiếu GEMINI_API_KEY. Bạn có thể bấm "Cài Đặt" góc trên bên phải để dán API Key trực tiếp.';
       } else {
         userFriendlyNotice = `Thông báo: ${errMsg || 'Hệ thống đã tự động kích hoạt ngân hàng câu hỏi chuẩn môn học.'}`;
       }
@@ -357,17 +448,27 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 relative z-10">
         {/* Error Banner */}
         {errorMessage && (
-          <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-center justify-between">
+          <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-center justify-between gap-3">
             <div className="flex items-center space-x-2">
               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
               <span>{errorMessage}</span>
             </div>
-            <button
-              onClick={() => setErrorMessage(null)}
-              className="text-rose-600 hover:text-rose-900 font-bold ml-4"
-            >
-              Đóng
-            </button>
+            <div className="flex items-center space-x-2 shrink-0">
+              {errorMessage.includes('GEMINI_API_KEY') && (
+                <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+                >
+                  ⚙️ Cài Đặt Key
+                </button>
+              )}
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-rose-600 hover:text-rose-900 font-bold px-2 py-1 cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
           </div>
         )}
 

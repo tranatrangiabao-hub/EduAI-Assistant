@@ -18,6 +18,7 @@ export interface Question {
   // For multiple_choice
   options?: [string, string, string, string] | string[];
   correctOption?: number; // 0..3
+  correctOptionText?: string;
 
   // For true_false (Đúng/Sai - 4 phát biểu a, b, c, d)
   tfStatements?: TrueFalseStatement[];
