@@ -1,4 +1,4 @@
-import app from "../server";
+import app from "../server.js";
 
 export const config = {
   maxDuration: 60,
@@ -8,5 +8,6 @@ export default function handler(req: any, res: any) {
   if (!req.url || req.url === '/' || !req.url.startsWith('/api')) {
     req.url = '/api/generate-quiz';
   }
+
   return app(req, res);
 }
