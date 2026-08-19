@@ -2198,11 +2198,12 @@ async function generateContentWithRetry(params: {
     try {
       const requestConfig: any = params.config ? { ...params.config } : {};
 
-      // Disable thinking tokens for ultra-fast generation (~1.5s - 2.5s)
+      // Disable/minimize thinking depending on model generation
       if (!requestConfig.thinkingConfig) {
-        requestConfig.thinkingConfig = {
-          thinkingBudget: 0,
-        };
+        const isGemini3x = modelName.startsWith("gemini-3");
+        requestConfig.thinkingConfig = isGemini3x
+          ? { thinkingLevel: "LOW" }      // Gemini 3.x dùng thinkingLevel
+          : { thinkingBudget: 0 };        // Gemini 2.x/2.5 dùng thinkingBudget
       }
 
       // Only attach googleSearch tool if responseSchema is NOT used, as tools conflict with structured JSON mode
