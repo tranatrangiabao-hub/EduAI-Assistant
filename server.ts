@@ -2212,7 +2212,7 @@ async function generateContentWithRetry(params: {
       }
 
       // 7.5-second max timeout per AI call so Vercel Serverless (10s limit) never times out with 504
-      const timeoutMs = 7500;
+      const timeoutMs = 15000;
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 7.5 seconds")), timeoutMs)
       );
