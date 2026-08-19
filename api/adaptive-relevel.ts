@@ -1,8 +1,11 @@
 import { handleAdaptiveRelevel } from "../server";
 
+// Hobby plan chỉ cho phép tối đa 10s
 export const config = {
-  maxDuration: 60,
+  maxDuration: 10,
 };
+
+const INTERNAL_TIMEOUT_MS = 8000;
 
 async function parseRequestBody(req: any): Promise<any> {
   if (req.body && typeof req.body === "object") return req.body;
@@ -16,6 +19,24 @@ async function parseRequestBody(req: any): Promise<any> {
       try { resolve(data ? JSON.parse(data) : {}); } catch (_) { resolve({}); }
     });
     req.on("error", () => resolve({}));
+  });
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
   });
 }
 
@@ -34,7 +55,11 @@ export default async function handler(req: any, res: any) {
   try {
     const body = await parseRequestBody(req);
     const customApiKey = (req.headers["x-gemini-api-key"] as string) || (req.headers["authorization"]?.replace("Bearer ", "") as string) || body?.apiKey;
-    const data = await handleAdaptiveRelevel(body, customApiKey);
+    const data = await withTimeout(
+      handleAdaptiveRelevel(body, customApiKey),
+      INTERNAL_TIMEOUT_MS,
+      "handleAdaptiveRelevel"
+    );
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(200).json({
@@ -48,4 +73,3 @@ export default async function handler(req: any, res: any) {
     });
   }
 }
-

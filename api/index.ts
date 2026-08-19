@@ -6,9 +6,13 @@ import {
   buildSmartFallbackFromContent,
 } from "../server";
 
+// Hobby plan chỉ cho phép tối đa 10s — set đúng thực tế, tránh hiểu nhầm
 export const config = {
-  maxDuration: 60,
+  maxDuration: 10,
 };
+
+// Ngưỡng timeout nội bộ, để lại buffer an toàn trước khi Vercel platform giết cứng ở giây thứ 10
+const INTERNAL_TIMEOUT_MS = 8000;
 
 async function parseRequestBody(req: any): Promise<any> {
   if (req.body && typeof req.body === "object") return req.body;
@@ -25,6 +29,25 @@ async function parseRequestBody(req: any): Promise<any> {
   });
 }
 
+// Ép timeout cho bất kỳ promise nào — nếu quá hạn, reject chủ động thay vì chờ Vercel kill
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -38,14 +61,21 @@ export default async function handler(req: any, res: any) {
 
   const url = req.url || "";
   const body = req.method === "POST" ? await parseRequestBody(req) : {};
-  const customApiKey = (req.headers["x-gemini-api-key"] as string) || (req.headers["authorization"]?.replace("Bearer ", "") as string) || body?.apiKey;
+  const customApiKey =
+    (req.headers["x-gemini-api-key"] as string) ||
+    (req.headers["authorization"]?.replace("Bearer ", "") as string) ||
+    body?.apiKey;
 
   if (url.includes("generate-quiz")) {
     try {
-      const data = await handleGenerateQuiz(body, customApiKey);
+      const data = await withTimeout(
+        handleGenerateQuiz(body, customApiKey),
+        INTERNAL_TIMEOUT_MS,
+        "handleGenerateQuiz"
+      );
       return res.status(200).json({ success: true, data });
     } catch (error: any) {
-      console.error("[Vercel /api/index generate-quiz Error]", error);
+      console.error("[Vercel /api/index generate-quiz Error]", error?.message || error);
       const safeSubject = body?.subject || "Tin học";
       const safeGrade = body?.grade || "Lớp 12";
       const safeContent = body?.content || "";
@@ -62,7 +92,11 @@ export default async function handler(req: any, res: any) {
 
   if (url.includes("adaptive-relevel")) {
     try {
-      const data = await handleAdaptiveRelevel(body, customApiKey);
+      const data = await withTimeout(
+        handleAdaptiveRelevel(body, customApiKey),
+        INTERNAL_TIMEOUT_MS,
+        "handleAdaptiveRelevel"
+      );
       return res.status(200).json({ success: true, data });
     } catch (error: any) {
       return res.status(200).json({
@@ -79,7 +113,11 @@ export default async function handler(req: any, res: any) {
 
   if (url.includes("explain-question")) {
     try {
-      const text = await handleExplainQuestion(body, customApiKey);
+      const text = await withTimeout(
+        handleExplainQuestion(body, customApiKey),
+        INTERNAL_TIMEOUT_MS,
+        "handleExplainQuestion"
+      );
       return res.status(200).json({ success: true, explanation: text });
     } catch (error: any) {
       return res.status(200).json({
@@ -109,4 +147,3 @@ export default async function handler(req: any, res: any) {
     service: "EduAI Vercel Router",
   });
 }
-
