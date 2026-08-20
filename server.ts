@@ -2194,27 +2194,36 @@ async function generateContentWithRetry(params: {
   const uniqueModels = Array.from(new Set(modelsToTry));
   let lastError: any = null;
 
+  // Overall budget across ALL retry attempts combined — stays safely
+  // under Vercel Hobby's 10s serverless function execution limit.
+  const OVERALL_TIMEOUT_MS = 8000;
+  const startTime = Date.now();
+
   for (const modelName of uniqueModels) {
+    const remaining = OVERALL_TIMEOUT_MS - (Date.now() - startTime);
+    if (remaining <= 500) {
+      // Not enough time budget left to attempt another model — stop retrying
+      // so we still have time to return a JSON fallback response.
+      lastError = lastError || new Error("AI_TIMEOUT: Insufficient time budget remaining for retry");
+      break;
+    }
+
     try {
       const requestConfig: any = params.config ? { ...params.config } : {};
 
-      // Disable/minimize thinking depending on model generation
       if (!requestConfig.thinkingConfig) {
         const isGemini3x = modelName.startsWith("gemini-3");
         requestConfig.thinkingConfig = isGemini3x
-          ? { thinkingLevel: "LOW" }      // Gemini 3.x dùng thinkingLevel
-          : { thinkingBudget: 0 };        // Gemini 2.x/2.5 dùng thinkingBudget
+          ? { thinkingLevel: "LOW" }
+          : { thinkingBudget: 0 };
       }
 
-      // Only attach googleSearch tool if responseSchema is NOT used, as tools conflict with structured JSON mode
       if (!requestConfig.tools && !requestConfig.responseSchema && requestConfig.responseMimeType !== "application/json") {
         requestConfig.tools = [{ googleSearch: {} }];
       }
 
-      // 7.5-second max timeout per AI call so Vercel Serverless (10s limit) never times out with 504
-      const timeoutMs = 15000;
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded 15 seconds")), timeoutMs)
+        setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded time budget")), remaining)
       );
 
       const callPromise = getAiClient(customApiKey).models.generateContent({
@@ -2235,9 +2244,7 @@ async function generateContentWithRetry(params: {
         errMsg.includes("no longer available") ||
         errMsg.includes("is not found");
 
-      if (isNotFound) {
-        continue;
-      }
+      if (isNotFound) continue;
 
       const isQuotaExhausted =
         errMsg.includes("429") ||
@@ -2253,7 +2260,7 @@ async function generateContentWithRetry(params: {
       const isTimeout = errMsg.includes("AI_TIMEOUT");
       if (isTimeout) {
         console.log(`[AI Timeout] Model ${modelName} reached limit. Activating fast fallback...`);
-        break; // break early to return smart curriculum fallback immediately
+        break;
       }
     }
   }
@@ -2265,7 +2272,6 @@ async function generateContentWithRetry(params: {
 
   throw lastError || new Error("Không thể kết nối đến máy chủ AI sau các lần thử.");
 }
-
 /**
  * Core business logic for Quiz Generation (callable by Express and Vercel Serverless)
  */
