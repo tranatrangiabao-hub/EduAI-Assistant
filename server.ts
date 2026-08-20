@@ -44,10 +44,18 @@ function resolveApiKey(customApiKey?: string): string {
 
 // Initialize Google GenAI Server-side helper
 function getAiClient(customApiKey?: string) {
-  const apiKey = resolveApiKey(customApiKey);
-  return new GoogleGenAI({
-    apiKey,
-  });
+  const apiKey =
+    customApiKey?.trim() ||
+    process.env.GEMINI_API_KEY?.trim() ||
+    process.env.API_KEY?.trim();
+
+  if (!apiKey) {
+    throw new Error(
+      "GEMINI_API_KEY_MISSING: Vercel chưa cung cấp GEMINI_API_KEY."
+    );
+  }
+
+  return new GoogleGenAI({ apiKey });
 }
 
 // Health check
