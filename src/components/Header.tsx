@@ -1,157 +1,193 @@
 import React from 'react';
-import { Sparkles, BookOpen, Gamepad2, FileText, BarChart3, Info, Download, History, Settings } from 'lucide-react';
-import { ActiveTab } from '../types';
-import { Language, translations } from '../i18n/translations';
+import { ActiveTab, SubjectType } from '../types';
+import { 
+  Sparkles, 
+  FileCheck2, 
+  Network, 
+  Layers, 
+  Gamepad2, 
+  FileText,
+  Printer,
+  Download,
+  BookOpen
+} from 'lucide-react';
 
 interface HeaderProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
-  questionCount: number;
-  lessonTitle: string;
-  onOpenExport: () => void;
-  onOpenProposalModal: () => void;
-  onOpenSettings: () => void;
-  language?: Language;
+  hasData: boolean;
+  onSelectSample: (sampleId: string) => void;
+  onPrintQuiz?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
-  questionCount,
-  lessonTitle,
-  onOpenExport,
-  onOpenProposalModal,
-  onOpenSettings,
+  hasData,
+  onSelectSample,
+  onPrintQuiz,
 }) => {
-  const t = translations['vi'];
-
   return (
-    <header className="bg-white text-slate-900 border-b border-slate-200 sticky top-0 z-40 shadow-xs">
+    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs no-print">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-20">
-          {/* Logo & Title */}
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-sm">
-              Σ
+        <div className="flex items-center justify-between h-16">
+          {/* Brand Logo & Name */}
+          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('input')}>
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-md shadow-indigo-200">
+              <Sparkles className="w-6 h-6 animate-pulse" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h1 className="font-bold text-xl tracking-tight text-slate-900">{t.appName}</h1>
-                <span className="text-[10px] text-blue-700 font-bold bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200 uppercase tracking-wider">
-                  {t.gdtnTag}
+                <span className="font-extrabold text-lg text-slate-900 tracking-tight">EduAI</span>
+                <span className="px-2 py-0.5 text-xs font-bold bg-indigo-100 text-indigo-700 rounded-full uppercase tracking-wider">
+                  GD&ĐT 2025+
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-medium uppercase tracking-widest hidden sm:block">
-                {t.appSubTitle}
+              <p className="text-xs text-slate-500 font-medium hidden sm:block">
+                Chuyển Đổi Học Liệu & Trò Chơi Học Tập AI
               </p>
             </div>
           </div>
 
-          {/* Action Buttons & Settings */}
-          <div className="flex items-center space-x-2 sm:space-x-3">
-            {/* Settings Button */}
+          {/* Navigation Tabs */}
+          <nav className="hidden md:flex items-center space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
-              onClick={onOpenSettings}
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all shadow-2xs cursor-pointer"
-              title={t.settings}
+              onClick={() => setActiveTab('input')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all ${
+                activeTab === 'input'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
             >
-              <Settings className="w-4 h-4 text-blue-600" />
-              <span className="hidden sm:inline">{t.settings}</span>
+              <FileText className="w-4 h-4" />
+              <span>Soạn Bài / Nhập Liệu</span>
             </button>
 
             <button
-              onClick={onOpenProposalModal}
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-200 transition-colors cursor-pointer"
-              title="Xem Hồ sơ Đề tài & Báo cáo Nghiên cứu Sư phạm"
+              onClick={() => setActiveTab('quiz')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all ${
+                activeTab === 'quiz'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
             >
-              <Info className="w-4 h-4 text-blue-600" />
-              <span className="hidden md:inline">{t.proposal}</span>
+              <FileCheck2 className="w-4 h-4" />
+              <span>Ngân Hàng Câu Hỏi</span>
+              {hasData && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
             </button>
 
-            {questionCount > 0 && (
-              <button
-                onClick={onOpenExport}
-                className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/20 transition-all cursor-pointer"
+            <button
+              onClick={() => setActiveTab('mindmap')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all ${
+                activeTab === 'mindmap'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <Network className="w-4 h-4" />
+              <span>Sơ Đồ Tư Duy</span>
+              {hasData && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('flashcards')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all ${
+                activeTab === 'flashcards'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>Flashcard Anki</span>
+              {hasData && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('wordwall')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all ${
+                activeTab === 'wordwall'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <Gamepad2 className="w-4 h-4 text-purple-600" />
+              <span>Trò Chơi Wordwall</span>
+              {hasData && <span className="w-2 h-2 rounded-full bg-purple-500" />}
+            </button>
+          </nav>
+
+          {/* Preset Selector & Action Buttons */}
+          <div className="flex items-center space-x-2">
+            <div className="relative">
+              <select
+                onChange={(e) => {
+                  if (e.target.value) {
+                    onSelectSample(e.target.value);
+                  }
+                }}
+                defaultValue=""
+                className="text-xs bg-slate-100 hover:bg-slate-200/70 border border-slate-300 text-slate-800 rounded-lg px-2.5 py-1.5 font-semibold transition-colors focus:ring-2 focus:ring-indigo-500 cursor-pointer"
               >
-                <Download className="w-4 h-4" />
-                <span>{t.export} ({questionCount})</span>
+                <option value="" disabled>⚡ Nạp Bài Mẫu Minh Họa...</option>
+                <option value="ester-lipit">🧪 Hóa 12: Ester & Lipit</option>
+                <option value="vatly-daodong">📐 Vật lý 12: Con lắc đơn & DĐĐH</option>
+              </select>
+            </div>
+
+            {activeTab === 'quiz' && onPrintQuiz && (
+              <button
+                onClick={onPrintQuiz}
+                className="hidden sm:inline-flex items-center space-x-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg transition-all shadow-xs cursor-pointer"
+                title="In đề thi hoặc xuất ra PDF/Word"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>In / PDF Đề Thi</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex space-x-2 overflow-x-auto no-scrollbar pb-2 text-xs font-semibold">
+        {/* Mobile Tab Navigation */}
+        <div className="md:hidden flex items-center justify-between border-t border-slate-200 py-2 overflow-x-auto space-x-1 no-scrollbar">
           <button
             onClick={() => setActiveTab('input')}
-            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'input'
-                ? 'bg-blue-50 text-blue-600 border border-blue-200 font-bold shadow-xs'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
+              activeTab === 'input' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
             }`}
           >
-            <BookOpen className="w-4 h-4" />
-            <span>{t.navInput}</span>
+            Soạn Bài
           </button>
-
           <button
-            onClick={() => setActiveTab('question_bank')}
-            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'question_bank'
-                ? 'bg-blue-50 text-blue-600 border border-blue-200 font-bold shadow-xs'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            onClick={() => setActiveTab('quiz')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
+              activeTab === 'quiz' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
             }`}
           >
-            <FileText className="w-4 h-4" />
-            <span>{t.navQuestions} ({questionCount})</span>
+            Ngân Hàng Câu Hỏi
           </button>
-
-          <button
-            onClick={() => setActiveTab('gamification')}
-            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'gamification'
-                ? 'bg-blue-50 text-blue-600 border border-blue-200 font-bold shadow-xs'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-            }`}
-          >
-            <Gamepad2 className="w-4 h-4 text-orange-500" />
-            <span>{t.navGamification}</span>
-          </button>
-
           <button
             onClick={() => setActiveTab('mindmap')}
-            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'mindmap'
-                ? 'bg-blue-50 text-blue-600 border border-blue-200 font-bold shadow-xs'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
+              activeTab === 'mindmap' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
             }`}
           >
-            <Sparkles className="w-4 h-4 text-blue-500" />
-            <span>{t.navMindmap}</span>
+            Sơ Đồ Tư Duy
           </button>
-
           <button
-            onClick={() => setActiveTab('analytics')}
-            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'analytics'
-                ? 'bg-blue-50 text-blue-600 border border-blue-200 font-bold shadow-xs'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            onClick={() => setActiveTab('flashcards')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
+              activeTab === 'flashcards' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
             }`}
           >
-            <BarChart3 className="w-4 h-4 text-emerald-600" />
-            <span>{t.navAnalytics}</span>
+            Flashcard
           </button>
-
           <button
-            onClick={() => setActiveTab('history')}
-            className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'history'
-                ? 'bg-blue-50 text-blue-600 border border-blue-200 font-bold shadow-xs'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            onClick={() => setActiveTab('wordwall')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap ${
+              activeTab === 'wordwall' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-700'
             }`}
           >
-            <History className="w-4 h-4 text-purple-600" />
-            <span>{t.navHistory}</span>
+            Trò Chơi Game
           </button>
         </div>
       </div>
