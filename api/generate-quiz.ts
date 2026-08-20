@@ -1,4 +1,4 @@
-import { handleGenerateQuiz, buildSmartFallbackFromContent } from "../server";
+import { handleGenerateQuiz, buildSmartFallbackFromContent, fetchVipQuestions } from "../server";
 
 // Hobby plan chỉ cho phép tối đa 10s — set đúng thực tế, tránh hiểu nhầm
 export const config = {
@@ -98,10 +98,24 @@ export default async function handler(req: any, res: any) {
     const safeCount = Math.max(1, Math.min(50, Number(body?.questionCount) || 10));
 
     const fallbackData = buildSmartFallbackFromContent(safeContent, safeSubject, safeGrade, safeSubject, safeCount);
+
+    // Bù thêm câu hỏi thuật toán từ engine vip.py nếu bộ fallback dựng sẵn
+    // chưa đủ số lượng yêu cầu.
+    const shortfall = safeCount - fallbackData.questions.length;
+    if (shortfall > 0) {
+      const gradeNumber = (safeGrade.match(/\d+/) || ["12"])[0];
+      const vipQuestions = await fetchVipQuestions({
+        grade: gradeNumber,
+        subject: safeSubject,
+        count: shortfall,
+      });
+      fallbackData.questions = [...fallbackData.questions, ...vipQuestions].slice(0, safeCount);
+    }
+
     return res.status(200).json({
       success: true,
       data: fallbackData,
-      warning: "Hệ thống đã kích hoạt bộ ngân hàng câu hỏi phân hóa chuẩn GD&ĐT theo tài liệu của bạn.",
+      warning: "Hệ thống đã kích hoạt bộ ngân hàng câu hỏi phân hóa chuẩn GD&ĐT (kết hợp bộ tạo đề riêng) theo tài liệu của bạn.",
     });
   }
 }

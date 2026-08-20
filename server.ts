@@ -1300,6 +1300,38 @@ function buildSmartFallbackFromContent(
     questions: questions.slice(0, targetCount)
   };
 }
+// Gọi sang Python function vip_generate để lấy thêm câu hỏi từ engine riêng
+// khi bộ fallback dựng sẵn không đủ số lượng. Luôn trả về mảng rỗng nếu lỗi,
+// không bao giờ làm gián đoạn response chính.
+async function fetchVipQuestions(params: {
+  grade: string;
+  subject: string;
+  count: number;
+  qtype?: string;
+  difficulty?: string;
+}): Promise<any[]> {
+  try {
+    const base = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : `http://localhost:${PORT}`;
+    const qs = new URLSearchParams({
+      grade: params.grade,
+      subject: params.subject,
+      count: String(params.count),
+      type: params.qtype || "Random",
+      difficulty: params.difficulty || "Random",
+    });
+    const res = await fetch(`${base}/api/vip_generate?${qs.toString()}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.questions) ? data.questions : [];
+  } catch (err) {
+    console.warn("[VIP Generator] fetch failed, skipping:", err);
+    return [];
+  }
+}
 
 function sanitizeTrueFalseStatementsServer(q: any, cleanQuestion: string, cleanTopic: string): any[] {
   let rawStatements: any[] = [];
@@ -2755,6 +2787,7 @@ app.post(["/api/explain-question", "/explain-question"], async (req, res) => {
 });
 
 export { buildSmartFallbackFromContent, pruneUnusedContent };
+export { buildSmartFallbackFromContent, pruneUnusedContent, fetchVipQuestions };
 
 // Express global JSON error handler middleware
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
