@@ -24,9 +24,27 @@ app.use((req, res, next) => {
   express.urlencoded({ limit: "50mb", extended: true })(req, res, next);
 });
 
+// Custom error type so callers can distinguish "no key configured" from
+// network/timeout/quota failures instead of collapsing everything into one
+// generic fallback message.
+export class MissingApiKeyError extends Error {
+  constructor() {
+    super("MISSING_API_KEY: No Gemini API key found (customApiKey / GEMINI_API_KEY / API_KEY are all empty).");
+    this.name = "MissingApiKeyError";
+  }
+}
+
+function resolveApiKey(customApiKey?: string): string {
+  const apiKey = (customApiKey || process.env.GEMINI_API_KEY || process.env.API_KEY || "").trim();
+  if (!apiKey) {
+    throw new MissingApiKeyError();
+  }
+  return apiKey;
+}
+
 // Initialize Google GenAI Server-side helper
 function getAiClient(customApiKey?: string) {
-  const apiKey = customApiKey || process.env.GEMINI_API_KEY || process.env.API_KEY || "";
+  const apiKey = resolveApiKey(customApiKey);
   return new GoogleGenAI({
     apiKey,
   });
@@ -1300,38 +1318,6 @@ function buildSmartFallbackFromContent(
     questions: questions.slice(0, targetCount)
   };
 }
-// Gọi sang Python function vip_generate để lấy thêm câu hỏi từ engine riêng
-// khi bộ fallback dựng sẵn không đủ số lượng. Luôn trả về mảng rỗng nếu lỗi,
-// không bao giờ làm gián đoạn response chính.
-async function fetchVipQuestions(params: {
-  grade: string;
-  subject: string;
-  count: number;
-  qtype?: string;
-  difficulty?: string;
-}): Promise<any[]> {
-  try {
-    const base = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : `http://localhost:${PORT}`;
-    const qs = new URLSearchParams({
-      grade: params.grade,
-      subject: params.subject,
-      count: String(params.count),
-      type: params.qtype || "Random",
-      difficulty: params.difficulty || "Random",
-    });
-    const res = await fetch(`${base}/api/vip_generate?${qs.toString()}`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data?.questions) ? data.questions : [];
-  } catch (err) {
-    console.warn("[VIP Generator] fetch failed, skipping:", err);
-    return [];
-  }
-}
 
 function sanitizeTrueFalseStatementsServer(q: any, cleanQuestion: string, cleanTopic: string): any[] {
   let rawStatements: any[] = [];
@@ -2209,12 +2195,27 @@ function sanitizeQuestionOptionsServer(q: any): any {
 // In-memory cache for fast repeat responses (< 50ms)
 const quizCache = new Map<string, { timestamp: number; data: any }>();
 
+// Time budget granted to the Gemini call chain for quiz generation.
+// Must stay strictly BELOW the outer wrapper timeout in api/generate-quiz.ts
+// (INTERNAL_TIMEOUT_MS) which itself must stay below Vercel's `maxDuration`
+// hard limit — otherwise Vercel kills the function with a raw 504 instead of
+// letting our own fallback logic respond gracefully.
+//   Vercel maxDuration (Hobby)      = 10000ms
+//   generate-quiz.ts wrapper budget =  8000ms   (buffer: 2000ms for JSON I/O)
+//   THIS budget (Gemini call chain) =  7000ms   (buffer: 1000ms for post-processing)
+const QUIZ_AI_BUDGET_MS = 7000;
+
 // Helper function to call Gemini API with fast fallback for serverless
 async function generateContentWithRetry(params: {
   contents: any;
   config?: any;
   model?: string;
-}, customApiKey?: string) {
+}, customApiKey?: string, budgetMs: number = 7000) {
+  // Fail fast on a missing key: no point burning the time budget racing a
+  // network call that will 100% reject on auth, and no point retrying other
+  // models either — they'd all fail the same way.
+  resolveApiKey(customApiKey);
+
   const requestedModel = params.model || "gemini-2.5-flash";
 
   const modelsToTry = [
@@ -2226,36 +2227,42 @@ async function generateContentWithRetry(params: {
   const uniqueModels = Array.from(new Set(modelsToTry));
   let lastError: any = null;
 
-  // Overall budget across ALL retry attempts combined — stays safely
-  // under Vercel Hobby's 10s serverless function execution limit.
-  const OVERALL_TIMEOUT_MS = 8000;
-  const startTime = Date.now();
+  // Single shared deadline for the WHOLE retry loop (not per-attempt), so
+  // trying multiple models can never exceed the caller's real time budget.
+  // budgetMs must stay comfortably under the outer wrapper timeout
+  // (generate-quiz.ts INTERNAL_TIMEOUT_MS) which itself stays under the
+  // Vercel `maxDuration` hard limit.
+  const deadlineAt = Date.now() + budgetMs;
 
   for (const modelName of uniqueModels) {
-    const remaining = OVERALL_TIMEOUT_MS - (Date.now() - startTime);
-    if (remaining <= 500) {
-      // Not enough time budget left to attempt another model — stop retrying
-      // so we still have time to return a JSON fallback response.
-      lastError = lastError || new Error("AI_TIMEOUT: Insufficient time budget remaining for retry");
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 300) {
+      // Not enough time left to even attempt another call — stop now
+      // instead of firing a request we know will be aborted mid-flight.
+      lastError = lastError || new Error("AI_TIMEOUT: No time budget left to attempt Gemini call.");
       break;
     }
 
     try {
       const requestConfig: any = params.config ? { ...params.config } : {};
 
+      // Disable/minimize thinking depending on model generation
       if (!requestConfig.thinkingConfig) {
         const isGemini3x = modelName.startsWith("gemini-3");
         requestConfig.thinkingConfig = isGemini3x
-          ? { thinkingLevel: "LOW" }
-          : { thinkingBudget: 0 };
+          ? { thinkingLevel: "LOW" }      // Gemini 3.x dùng thinkingLevel
+          : { thinkingBudget: 0 };        // Gemini 2.x/2.5 dùng thinkingBudget
       }
 
+      // Only attach googleSearch tool if responseSchema is NOT used, as tools conflict with structured JSON mode.
+      // Also skip it here entirely for quiz generation: it adds real network
+      // latency we cannot afford inside a sub-10s serverless budget.
       if (!requestConfig.tools && !requestConfig.responseSchema && requestConfig.responseMimeType !== "application/json") {
         requestConfig.tools = [{ googleSearch: {} }];
       }
 
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI_TIMEOUT: Gemini call exceeded time budget")), remaining)
+        setTimeout(() => reject(new Error(`AI_TIMEOUT: Gemini call exceeded ${remainingMs}ms budget`)), remainingMs)
       );
 
       const callPromise = getAiClient(customApiKey).models.generateContent({
@@ -2276,7 +2283,9 @@ async function generateContentWithRetry(params: {
         errMsg.includes("no longer available") ||
         errMsg.includes("is not found");
 
-      if (isNotFound) continue;
+      if (isNotFound && Date.now() < deadlineAt) {
+        continue;
+      }
 
       const isQuotaExhausted =
         errMsg.includes("429") ||
@@ -2284,26 +2293,30 @@ async function generateContentWithRetry(params: {
         errMsg.includes("Quota exceeded") ||
         errMsg.includes("Rate Limit");
 
-      if (isQuotaExhausted) {
+      if (isQuotaExhausted && Date.now() < deadlineAt) {
         console.log(`Model ${modelName} rate limited (429). Trying next fallback...`);
         continue;
       }
 
       const isTimeout = errMsg.includes("AI_TIMEOUT");
       if (isTimeout) {
-        console.log(`[AI Timeout] Model ${modelName} reached limit. Activating fast fallback...`);
-        break;
+        console.log(`[AI Timeout] Model ${modelName} reached ${budgetMs}ms budget. Activating fast fallback...`);
+        break; // break early to return smart curriculum fallback immediately
       }
     }
   }
 
   const lastErrMsg = String(lastError?.message || lastError || '');
   if (lastErrMsg.includes("429") || lastErrMsg.includes("RESOURCE_EXHAUSTED") || lastErrMsg.includes("Quota exceeded") || lastErrMsg.includes("Rate Limit")) {
-    throw new Error("Hệ thống Gemini AI đang tạm thời đạt giới hạn tần suất gửi câu hỏi (429 Rate Limit). Vui lòng đợi 30-45 giây rồi thử lại.");
+    throw new Error("QUOTA_EXCEEDED: Hệ thống Gemini AI đang tạm thời đạt giới hạn tần suất gửi câu hỏi (429 Rate Limit). Vui lòng đợi 30-45 giây rồi thử lại.");
+  }
+  if (lastErrMsg.includes("AI_TIMEOUT")) {
+    throw new Error(`AI_TIMEOUT: Gemini không phản hồi kịp trong ${budgetMs}ms ngân sách thời gian cho phép (giới hạn serverless).`);
   }
 
   throw lastError || new Error("Không thể kết nối đến máy chủ AI sau các lần thử.");
 }
+
 /**
  * Core business logic for Quiz Generation (callable by Express and Vercel Serverless)
  */
@@ -2559,7 +2572,7 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
           required: ["title", "summaryPoints", "questions"],
         },
       },
-    }, effectiveApiKey);
+    }, effectiveApiKey, QUIZ_AI_BUDGET_MS);
 
     const jsonText = response.text || "{}";
     const parsedData = safeParseJSON(jsonText, { subject: reqSubject, grade: reqGrade, title: reqSubject, content: cleanedContent });
@@ -2619,14 +2632,39 @@ Hãy biên soạn ngân hàng câu hỏi trắc nghiệm, lời giải chi tiế
  * Generates an automated GD&ĐT matrix aligned MCQ bank & summary points from input text
  */
 app.post(["/api/generate-quiz", "/generate-quiz"], async (req, res) => {
+  // NOTE: standalone Node/Express (not Vercel) has no 10s hard limit, so this
+  // path previously ignored any client-supplied key entirely and only ever
+  // used process.env — fixed to accept the same header/body key sources as
+  // the Vercel handler for consistent behavior between environments.
+  const customApiKey =
+    (req.headers["x-gemini-api-key"] as string) ||
+    (req.headers["authorization"]?.toString().replace("Bearer ", "")) ||
+    req.body?.apiKey;
+
   try {
-    const data = await handleGenerateQuiz(req.body);
+    const data = await handleGenerateQuiz(req.body, customApiKey);
     return res.json({
       success: true,
       data,
     });
   } catch (error: any) {
-    console.error("[QuizGen Error]", error);
+    const errMsg = String(error?.message || error);
+    console.error("[QuizGen Error]", errMsg);
+
+    let errorType: "MISSING_API_KEY" | "AI_TIMEOUT" | "QUOTA_EXCEEDED" | "UNKNOWN" = "UNKNOWN";
+    let warning = "Hệ thống AI gặp sự cố không xác định. Đã kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT dự phòng.";
+
+    if (errMsg.includes("MISSING_API_KEY") || error?.name === "MissingApiKeyError") {
+      errorType = "MISSING_API_KEY";
+      warning = "Chưa cấu hình GEMINI_API_KEY hợp lệ. Đã dùng bộ ngân hàng câu hỏi dự phòng.";
+    } else if (errMsg.includes("AI_TIMEOUT")) {
+      errorType = "AI_TIMEOUT";
+      warning = "Gemini phản hồi chậm hơn ngân sách thời gian cho phép. Đã dùng bộ ngân hàng câu hỏi dự phòng.";
+    } else if (errMsg.includes("QUOTA_EXCEEDED") || errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED")) {
+      errorType = "QUOTA_EXCEEDED";
+      warning = "Gemini API đang đạt giới hạn tần suất (429). Vui lòng đợi 30-45 giây rồi thử lại.";
+    }
+
     const safeSubject = req.body?.subject || "Tin học";
     const safeGrade = req.body?.grade || "Lớp 12";
     const safeContent = cleanTextForAi(req.body?.content || "", 8000);
@@ -2636,7 +2674,9 @@ app.post(["/api/generate-quiz", "/generate-quiz"], async (req, res) => {
     return res.json({
       success: true,
       data: fallbackData,
-      warning: "Hệ thống AI đang khởi động hoặc đạt giới hạn tần suất. Đã kích hoạt bộ ngân hàng câu hỏi chuẩn GD&ĐT dự phòng để bạn sử dụng ngay."
+      warning,
+      errorType,
+      debugError: errMsg,
     });
   }
 });
@@ -2786,7 +2826,7 @@ app.post(["/api/explain-question", "/explain-question"], async (req, res) => {
   }
 });
 
-export { buildSmartFallbackFromContent, pruneUnusedContent, fetchVipQuestions };
+export { buildSmartFallbackFromContent, pruneUnusedContent };
 
 // Express global JSON error handler middleware
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

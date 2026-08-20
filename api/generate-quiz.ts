@@ -1,4 +1,4 @@
-import { handleGenerateQuiz, buildSmartFallbackFromContent, fetchVipQuestions } from "../server";
+import { handleGenerateQuiz, buildSmartFallbackFromContent } from "../server";
 
 // Hobby plan chỉ cho phép tối đa 10s — set đúng thực tế, tránh hiểu nhầm
 export const config = {
@@ -91,31 +91,41 @@ export default async function handler(req: any, res: any) {
       data,
     });
   } catch (error: any) {
-    console.error("[Vercel /api/generate-quiz Error]", error?.message || error);
+    const errMsg = String(error?.message || error);
+    console.error("[Vercel /api/generate-quiz Error]", errMsg);
+
+    // Classify the real failure instead of collapsing everything into one
+    // generic message — the frontend needs this to show the CORRECT banner
+    // (e.g. don't tell the user "missing API key" when it was actually a
+    // timeout or a quota limit; those need completely different fixes).
+    let errorType: "MISSING_API_KEY" | "AI_TIMEOUT" | "QUOTA_EXCEEDED" | "UNKNOWN" = "UNKNOWN";
+    let warning = "Hệ thống AI gặp sự cố không xác định. Đã kích hoạt bộ ngân hàng câu hỏi phân hóa chuẩn GD&ĐT dự phòng.";
+
+    if (errMsg.includes("MISSING_API_KEY") || error?.name === "MissingApiKeyError") {
+      errorType = "MISSING_API_KEY";
+      warning = "Chưa cấu hình GEMINI_API_KEY hợp lệ (cả biến môi trường trên Vercel lẫn key nhập tay đều trống). Đã dùng bộ ngân hàng câu hỏi dự phòng.";
+    } else if (errMsg.includes("AI_TIMEOUT")) {
+      errorType = "AI_TIMEOUT";
+      warning = "Gemini phản hồi chậm hơn ngân sách thời gian cho phép của Vercel Serverless. Đã dùng bộ ngân hàng câu hỏi dự phòng — hãy thử giảm số câu hỏi mỗi lần sinh, hoặc nâng cấp gói Vercel để có thời gian xử lý dài hơn.";
+    } else if (errMsg.includes("QUOTA_EXCEEDED") || errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED")) {
+      errorType = "QUOTA_EXCEEDED";
+      warning = "Gemini API đang đạt giới hạn tần suất (429). Vui lòng đợi 30-45 giây rồi thử lại.";
+    }
+
     const safeSubject = body?.subject || "Tin học";
     const safeGrade = body?.grade || "Lớp 12";
     const safeContent = body?.content || "";
     const safeCount = Math.max(1, Math.min(50, Number(body?.questionCount) || 10));
 
     const fallbackData = buildSmartFallbackFromContent(safeContent, safeSubject, safeGrade, safeSubject, safeCount);
-
-    // Bù thêm câu hỏi thuật toán từ engine vip.py nếu bộ fallback dựng sẵn
-    // chưa đủ số lượng yêu cầu.
-    const shortfall = safeCount - fallbackData.questions.length;
-    if (shortfall > 0) {
-      const gradeNumber = (safeGrade.match(/\d+/) || ["12"])[0];
-      const vipQuestions = await fetchVipQuestions({
-        grade: gradeNumber,
-        subject: safeSubject,
-        count: shortfall,
-      });
-      fallbackData.questions = [...fallbackData.questions, ...vipQuestions].slice(0, safeCount);
-    }
-
     return res.status(200).json({
       success: true,
       data: fallbackData,
-      warning: "Hệ thống đã kích hoạt bộ ngân hàng câu hỏi phân hóa chuẩn GD&ĐT (kết hợp bộ tạo đề riêng) theo tài liệu của bạn.",
+      warning,
+      errorType,
+      // Raw message kept separately for debugging/logging in the frontend
+      // console — never shown raw to end users.
+      debugError: errMsg,
     });
   }
 }
